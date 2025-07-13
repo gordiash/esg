@@ -1,0 +1,206 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    paths: ['backend/**', 'shared/**', '.github/workflows/backend.yml']
+  pull_request:
+    branches: [main]
+    paths: ['backend/**', 'shared/**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: esg_platform_test
+          MYSQL_USER: esg_test
+          MYSQL_PASSWORD: test_password
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      
+      - name: Install dependencies
+        run: |
+          cd backend
+          npm ci
+      
+      - name: Build shared package
+        run: |
+          cd shared
+          npm ci
+          npm run build
+      
+      - name: Run linting
+        run: |
+          cd backend
+          npm run lint
+      
+      - name: Run type checking
+        run: |
+          cd backend
+          npm run build
+      
+      - name: Generate Prisma Client
+        run: |
+          cd backend
+          npm run prisma:generate
+        env:
+          DATABASE_URL: mysql://esg_test:test_password@localhost:3306/esg_platform_test
+      
+      - name: Run database migrations
+        run: |
+          cd backend
+          npm run prisma:migrate
+        env:
+          DATABASE_URL: mysql://esg_test:test_password@localhost:3306/esg_platform_test
+      
+      - name: Run unit tests
+        run: |
+          cd backend
+          npm run test:cov
+        env:
+          DATABASE_URL: mysql://esg_test:test_password@localhost:3306/esg_platform_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-jwt-secret
+          NODE_ENV: test
+      
+      - name: Run E2E tests
+        run: |
+          cd backend
+          npm run test:e2e
+        env:
+          DATABASE_URL: mysql://esg_test:test_password@localhost:3306/esg_platform_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-jwt-secret
+          NODE_ENV: test
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./backend/coverage/lcov.info
+          flags: backend
+          name: backend-coverage
+
+  security:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      
+      - name: Install dependencies
+        run: |
+          cd backend
+          npm ci
+      
+      - name: Run security audit
+        run: |
+          cd backend
+          npm audit --audit-level=high
+      
+      - name: Run Snyk security scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
+          command: test
+          working-directory: backend
+
+  deploy:
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      
+      - name: Install dependencies
+        run: |
+          cd backend
+          npm ci
+      
+      - name: Build application
+        run: |
+          cd backend
+          npm run build
+      
+      - name: Deploy to Railway
+        uses: railway/deploy@v1
+        with:
+          token: ${{ secrets.RAILWAY_TOKEN }}
+          project: ${{ secrets.RAILWAY_PROJECT_ID }}
+          environment: production
+          working-directory: backend
+      
+      - name: Run database migrations (production)
+        run: |
+          cd backend
+          npm run prisma:migrate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      
+      - name: Notify deployment success
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          channel: '#deployments'
+          text: '🚀 Backend deployed successfully to production!'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: success()
+      
+      - name: Notify deployment failure
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          channel: '#deployments'
+          text: '❌ Backend deployment failed!'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: failure() 

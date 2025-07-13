@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: esg-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: esg_platform_dev
+      MYSQL_USER: esg_user
+      MYSQL_PASSWORD: esg_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d
+      - ./mysql/conf:/etc/mysql/conf.d
+    networks:
+      - esg-network
+    command: --default-authentication-plugin=mysql_native_password
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: esg-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - esg-network
+    command: redis-server --appendonly yes
+
+  # PhpMyAdmin for database management
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: esg-phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: root
+      PMA_PASSWORD: root_password
+    ports:
+      - "8080:80"
+    depends_on:
+      - mysql
+    networks:
+      - esg-network
+
+  # Backend API (uncomment when ready to containerize)
+  # backend:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: Dockerfile
+  #   container_name: esg-backend
+  #   restart: unless-stopped
+  #   environment:
+  #     - NODE_ENV=development
+  #     - DATABASE_URL=mysql://esg_user:esg_password@mysql:3306/esg_platform_dev
+  #     - REDIS_URL=redis://redis:6379
+  #     - JWT_SECRET=your-jwt-secret-key
+  #     - CORS_ORIGIN=http://localhost:3001
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - mysql
+  #     - redis
+  #   volumes:
+  #     - ./backend:/app
+  #     - /app/node_modules
+  #   networks:
+  #     - esg-network
+
+  # Frontend (uncomment when ready to containerize)
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: esg-frontend
+  #   restart: unless-stopped
+  #   environment:
+  #     - NEXT_PUBLIC_API_URL=http://localhost:3000/api/v1
+  #     - NEXT_PUBLIC_AUTH0_DOMAIN=your-auth0-domain.auth0.com
+  #     - NEXT_PUBLIC_AUTH0_CLIENT_ID=your-auth0-client-id
+  #   ports:
+  #     - "3001:3001"
+  #   depends_on:
+  #     - backend
+  #   volumes:
+  #     - ./frontend:/app
+  #     - /app/node_modules
+  #   networks:
+  #     - esg-network
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  esg-network:
+    driver: bridge 
